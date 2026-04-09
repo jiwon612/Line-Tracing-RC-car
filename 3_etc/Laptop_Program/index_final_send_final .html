@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>RC카 제어</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: url('background.jpg') no-repeat center center fixed;
+      background-size: cover;
+      color: #ffffff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+    }
+    h1 {
+      font-size: 38px;
+      margin-bottom: 30px;
+      color: #ffffff;
+      letter-spacing: 1px;
+    }
+    input[type="password"] {
+      padding: 12px;
+      font-size: 18px;
+      border-radius: 10px;
+      border: none;
+      outline: none;
+      width: 250px;
+      margin-bottom: 20px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.3);
+    }
+    button {
+      background-color: #00bcd4;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 12px 30px;
+      font-size: 20px;
+      margin: 8px;
+      cursor: pointer;
+      transition: background-color 0.3s ease, transform 0.2s ease;
+    }
+    button:hover {
+      background-color: #028fa1;
+      transform: translateY(-2px);
+    }
+    .joystick {
+      display: grid;
+      grid-template-columns: 80px 80px 80px;
+      grid-template-rows: 80px 80px 80px;
+      gap: 12px;
+      justify-content: center;
+      align-items: center;
+      margin-top: 30px;
+    }
+    .joystick button {
+      width: 80px;
+      height: 80px;
+      font-size: 26px;
+      border-radius: 15px;
+      background-color: #00bcd4;
+    }
+    .joystick button:hover {
+      background-color: #028fa1;
+    }
+    #backBtn {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      font-size: 30px;
+      background-color: transparent;
+      color: #ffffff;
+      border: none;
+      cursor: pointer;
+      transition: transform 0.2s ease;
+    }
+    #backBtn:hover {
+      transform: scale(1.2);
+      color: #00bcd4;
+    }
+    #rcvStatus {
+      margin: 1em 0;
+      padding: 0.5em;
+      border: 1px solid #666;
+    }
+    #currentMode {
+      margin-top: 15px;
+      font-size: 20px;
+      font-weight: bold;
+      color: #00ffff;
+    }
+  </style>
+  <script>
+    let port;
+    let writer;
+    let reader;
+    let keepReading = true;
+
+    async function connectSerial() {
+      try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 9600 });
+        writer = port.writable.getWriter();
+        reader = port.readable.getReader();
+        keepReading = true;
+        readLoop();
+        alert("포트 연결 성공");
+      } catch (err) {
+        alert("포트 연결 실패: " + err);
+      }
+    }
+
+    async function disconnectSerial() {
+      try {
+        keepReading = false;
+        if (reader) {
+          await reader.cancel();
+          reader.releaseLock();
+        }
+        if (writer) {
+          writer.releaseLock();
+        }
+        if (port) {
+          await port.close();
+        }
+        alert("포트 해제 완료");
+      } catch (err) {
+        alert("포트 해제 실패: " + err);
+      }
+    }
+
+    async function sendCommand(char) {
+      if (!writer) {
+        alert("먼저 포트를 연결하세요.");
+        return;
+      }
+      const encoder = new TextEncoder();
+      const data = encoder.encode(char);
+      await writer.write(data);
+    }
+
+    function sendWithAutoStop(char) {
+      sendCommand(char);
+      setTimeout(() => sendCommand('s'), 500);  // 0.5초 후 정지
+    }
+
+    async function readLoop() {
+      while (keepReading) {
+        try {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (value && value.length > 0) {
+            const received = value[0];
+            updateReceivedByte(received);
+          }
+        } catch (err) {
+          console.error("Read error:", err);
+          break;
+        }
+      }
+    }
+
+    function updateReceivedByte(byte) {
+      const display = document.getElementById("rcvValue");
+      if (display) {
+        display.textContent = `0x${byte.toString(16).padStart(2, "0").toUpperCase()}`;
+      }
+
+      // 모드 상태 확인 (시프트된 값 기준)
+      if (byte === 0x26) {
+        updateModeLabel("수동 (확인됨)");
+      } else if (byte === 0x20) {
+        updateModeLabel("자동 (확인됨)");
+      }
+
+      updateSteeringImage(byte);
+    }
+
+    function updateSteeringImage(byte) {
+      const img = document.getElementById("steeringImg");
+      if (!img) return;
+      switch (byte) {
+        case "f".charCodeAt(0) >> 1: img.src = "up.png"; break;
+        case "b".charCodeAt(0) >> 1: img.src = "down.png"; break;
+        case "l".charCodeAt(0) >> 1: img.src = "left.png"; break;
+        case "r".charCodeAt(0) >> 1: img.src = "right.png"; break;
+        case "s".charCodeAt(0) >> 1: img.src = "stop.png"; break;
+        default: img.src = "center.png";
+      }
+    }
+
+    function checkPassword() {
+      const password = document.getElementById("password").value;
+      if (password === "1234") {
+        document.getElementById("passwordSection").style.display = "none";
+        document.getElementById("modeSection").style.display = "block";
+      } else {
+        alert("비밀번호가 틀렸습니다.");
+      }
+    }
+
+    function showManual() {
+      sendCommand('M');
+      updateModeLabel("수동 (요청됨)");
+      document.getElementById("modeSection").style.display = "none";
+      document.getElementById("manualSection").style.display = "block";
+    }
+
+    function showAuto() {
+      sendCommand('A');
+      updateModeLabel("자동 (요청됨)");
+      document.getElementById("modeSection").style.display = "none";
+      document.getElementById("autoSection").style.display = "block";
+    }
+
+    function goBack(section) {
+      document.getElementById(section).style.display = "none";
+      document.getElementById("modeSection").style.display = "block";
+    }
+
+    function updateModeLabel(mode) {
+      const modeEl = document.getElementById("currentMode");
+      if (modeEl) modeEl.textContent = `현재 모드: ${mode}`;
+    }
+  </script>
+</head>
+<body>
+  <div id="passwordSection">
+    <h1>비밀번호를 입력하세요</h1>
+    <input type="password" id="password" placeholder="비밀번호 입력" />
+    <button onclick="checkPassword()">확인</button>
+  </div>
+
+  <div id="modeSection" style="display:none;">
+    <h1>주행 모드를 선택하세요</h1>
+    <button onclick="connectSerial()">포트 연결</button>
+    <button onclick="disconnectSerial()">포트 해제</button>
+    <div style="margin-top:20px;">
+      <button onclick="showManual()">수동 주행</button>
+      <button onclick="showAuto()">자동 주행</button>
+    </div>
+    <div id="currentMode">현재 모드: 없음</div>
+  </div>
+
+  <div id="manualSection" style="display:none;">
+    <button id="backBtn" onclick="goBack('manualSection')">↩</button>
+    <h1>수동 주행 모드</h1>
+    <div id="rcvStatus">
+      <strong>마지막 수신 바이트:</strong>
+      <span id="rcvValue">없음</span>
+    </div>
+    <div class="joystick">
+      <div></div>
+      <button onclick="sendCommand('f')">↑</button> <!-- 자동 정지 없음 -->
+      <div></div>
+      <button onclick="sendWithAutoStop('l')">←</button>
+      <button onclick="sendCommand('s')">■</button>
+      <button onclick="sendWithAutoStop('r')">→</button>
+      <div></div>
+      <button onclick="sendCommand('b')">↓</button> <!-- 자동 정지 없음 -->
+      <div></div>
+    </div>
+  </div>
+
+  <div id="autoSection" style="display:none;">
+    <button id="backBtn" onclick="goBack('autoSection')">↩</button>
+    <h1>자동 주행 모드</h1>
+    <img id="steeringImg" src="center.png" alt="Steering Image" width="150" height="150" />
+    <div id="rcvStatus">
+      <strong>마지막 수신 바이트:</strong>
+      <span id="rcvValue">없음</span>
+    </div>
+  </div>
+</body>
+</html>
